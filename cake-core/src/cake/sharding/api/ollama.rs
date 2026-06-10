@@ -225,15 +225,27 @@ fn model_entry(m: &model_registry::LocalModel) -> OllamaModelEntry {
     }
 }
 
+/// Name the loaded model is served under: the model id/path the server was
+/// started with (e.g. "evilsocket/Qwen3-0.6B"), falling back to the
+/// architecture name when unset.
+fn loaded_model_name<M: Model>(master: &Master<M>) -> String {
+    let id = master.ctx.args.model.trim();
+    if id.is_empty() {
+        M::MODEL_NAME.to_string()
+    } else {
+        id.to_string()
+    }
+}
+
 /// Warn when the client asked for a model other than the one loaded:
 /// cake serves a single model per process.
-fn warn_model_mismatch<M: Model>(requested: &Option<String>) {
+fn warn_model_mismatch<M: Model>(requested: &Option<String>, loaded: &str) {
     if let Some(requested) = requested {
-        if requested != M::MODEL_NAME {
+        if requested != loaded && requested != M::MODEL_NAME {
             log::warn!(
                 "client requested model '{}' but '{}' is loaded — serving with the loaded model",
                 requested,
-                M::MODEL_NAME
+                loaded
             );
         }
     }
@@ -252,7 +264,7 @@ pub async fn version() -> impl Responder {
 pub async fn tags<M: Model>(state: web::Data<Arc<RwLock<Master<M>>>>) -> impl Responder {
     let loaded = {
         let master = state.read().await;
-        master.model.as_ref().map(|_| M::MODEL_NAME.to_string())
+        master.model.as_ref().map(|_| loaded_model_name(&master))
     };
 
     let cached = tokio::task::spawn_blocking(model_registry::list_models)
@@ -292,14 +304,15 @@ pub async fn tags<M: Model>(state: web::Data<Arc<RwLock<Master<M>>>>) -> impl Re
 /// GET /api/ps — the currently loaded model (cake loads exactly one).
 pub async fn ps<M: Model>(state: web::Data<Arc<RwLock<Master<M>>>>) -> impl Responder {
     let master = state.read().await;
+    let name = loaded_model_name(&master);
     let models: Vec<serde_json::Value> = master
         .model
         .as_ref()
         .map(|_| {
             vec![serde_json::json!({
-                "name": M::MODEL_NAME,
-                "model": M::MODEL_NAME,
-                "digest": name_digest(M::MODEL_NAME),
+                "name": name,
+                "model": name,
+                "digest": name_digest(&name),
                 "expires_at": "never",
             })]
         })
@@ -340,13 +353,17 @@ pub async fn chat<M: Model>(
     body: web::Json<OllamaChatRequest>,
 ) -> impl Responder {
     let request = body.0;
-    warn_model_mismatch::<M>(&request.model);
+    let loaded = {
+        let master = state.read().await;
+        loaded_model_name(&master)
+    };
+    warn_model_mismatch::<M>(&request.model, &loaded);
     let max_tokens = request.options.unwrap_or_default().num_predict;
 
     if request.stream.unwrap_or(true) {
-        chat_stream::<M>(state, request.messages, max_tokens)
+        chat_stream::<M>(state, loaded, request.messages, max_tokens)
     } else {
-        chat_blocking::<M>(state, request.messages, max_tokens).await
+        chat_blocking::<M>(state, loaded, request.messages, max_tokens).await
     }
 }
 
@@ -358,7 +375,11 @@ pub async fn generate<M: Model>(
     body: web::Json<OllamaGenerateRequest>,
 ) -> impl Responder {
     let request = body.0;
-    warn_model_mismatch::<M>(&request.model);
+    let loaded = {
+        let master = state.read().await;
+        loaded_model_name(&master)
+    };
+    warn_model_mismatch::<M>(&request.model, &loaded);
     let max_tokens = request.options.unwrap_or_default().num_predict;
 
     let mut messages = Vec::new();
@@ -368,9 +389,9 @@ pub async fn generate<M: Model>(
     messages.push(Message::user(request.prompt));
 
     if request.stream.unwrap_or(true) {
-        generate_stream::<M>(state, messages, max_tokens)
+        generate_stream::<M>(state, loaded, messages, max_tokens)
     } else {
-        generate_blocking::<M>(state, messages, max_tokens).await
+        generate_blocking::<M>(state, loaded, messages, max_tokens).await
     }
 }
 
@@ -378,13 +399,14 @@ pub async fn generate<M: Model>(
 
 async fn chat_blocking<M: Model>(
     state: web::Data<Arc<RwLock<Master<M>>>>,
+    model: String,
     messages: Vec<Message>,
     max_tokens: Option<usize>,
 ) -> HttpResponse {
     let started = Instant::now();
     match run_generation(&state, messages, max_tokens).await {
         Ok(outcome) => HttpResponse::Ok().json(OllamaChatChunk {
-            model: M::MODEL_NAME.to_string(),
+            model,
             created_at: now_rfc3339(),
             message: OllamaMessage {
                 role: "assistant".to_string(),
@@ -402,10 +424,10 @@ async fn chat_blocking<M: Model>(
 
 fn chat_stream<M: Model>(
     state: web::Data<Arc<RwLock<Master<M>>>>,
+    model: String,
     messages: Vec<Message>,
     max_tokens: Option<usize>,
 ) -> HttpResponse {
-    let model = M::MODEL_NAME.to_string();
     let mut rx = spawn_generation(state, messages, max_tokens);
 
     let stream = async_stream::stream! {
@@ -460,13 +482,14 @@ fn chat_stream<M: Model>(
 
 async fn generate_blocking<M: Model>(
     state: web::Data<Arc<RwLock<Master<M>>>>,
+    model: String,
     messages: Vec<Message>,
     max_tokens: Option<usize>,
 ) -> HttpResponse {
     let started = Instant::now();
     match run_generation(&state, messages, max_tokens).await {
         Ok(outcome) => HttpResponse::Ok().json(OllamaGenerateChunk {
-            model: M::MODEL_NAME.to_string(),
+            model,
             created_at: now_rfc3339(),
             response: outcome.text,
             done: true,
@@ -481,10 +504,10 @@ async fn generate_blocking<M: Model>(
 
 fn generate_stream<M: Model>(
     state: web::Data<Arc<RwLock<Master<M>>>>,
+    model: String,
     messages: Vec<Message>,
     max_tokens: Option<usize>,
 ) -> HttpResponse {
-    let model = M::MODEL_NAME.to_string();
     let mut rx = spawn_generation(state, messages, max_tokens);
 
     let stream = async_stream::stream! {

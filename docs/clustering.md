@@ -62,7 +62,19 @@ ln -s /Applications/Tailscale.app/Contents/MacOS/Tailscale /usr/local/bin/tailsc
 
 Use a `--cluster-key` even inside a tailnet: Tailscale encrypts transport between nodes, but the key's mutual authentication ensures only your intended nodes join the cluster (a tailnet often contains more devices than the cluster).
 
-For predictable memory use on small nodes, prefer a manual topology with Tailscale hostnames — see `topology-minis.yml` in the repo root for a worked example targeting a cluster of 2014 Intel Mac Minis.
+For predictable memory use on small nodes, prefer a manual topology with Tailscale hostnames — see `topology-minis.yml` in the repo root for a worked example targeting a cluster of 2014 Intel Mac Minis. With a manual topology, start each worker without a positional model (worker mode), passing the model via `--model` so it loads its assigned layers from its local cache:
+
+```sh
+# On each worker mini
+cake run --cluster-key mysecret --model Qwen/Qwen3-1.7B \
+         --name mini2 --topology topology-minis.yml --address 0.0.0.0:10128
+
+# On the master
+cake serve Qwen/Qwen3-1.7B --cluster-key mysecret \
+           --topology topology-minis.yml --api 0.0.0.0:8080
+```
+
+`scripts/start-minis.sh` automates the worker startup over SSH.
 
 ### CPU-only nodes (e.g. Intel Mac Minis)
 

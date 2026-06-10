@@ -42,9 +42,9 @@ enum Commands {
         /// Model name or HuggingFace repo
         #[arg(id = "model_name")]
         model: String,
-        /// API bind address
-        #[arg(long = "api", default_value = "0.0.0.0:8080")]
-        address: String,
+        // The bind address comes from the flattened Args `--api` flag
+        // (a separate field here would collide with Args' `address`/`api`
+        // ids and break clap parsing); defaults to 0.0.0.0:8080 below.
         #[command(flatten)]
         args: Args,
     },
@@ -135,9 +135,11 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Serve { model, address, mut args } => {
+        Commands::Serve { model, mut args } => {
             args.model = model;
-            args.api = Some(address);
+            if args.api.is_none() {
+                args.api = Some("0.0.0.0:8080".to_string());
+            }
             args.mode = Mode::Master;
             run_as_master(args).await
         }
