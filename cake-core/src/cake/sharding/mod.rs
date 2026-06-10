@@ -13,6 +13,7 @@ pub(crate) mod proto;
 pub(crate) mod client;
 pub(crate) mod worker;
 pub mod auth;
+pub mod tailscale;
 #[cfg(feature = "master")]
 pub mod api;
 #[cfg(feature = "master")]
@@ -164,6 +165,7 @@ pub async fn master_setup(
     model_path: &Path,
     discovery_timeout: Duration,
     min_workers: usize,
+    use_tailscale: bool,
 ) -> Result<Topology> {
     // Read config.json and compute a fingerprint for cache keying
     let config_path = model_path.join("config.json");
@@ -204,8 +206,25 @@ pub async fn master_setup(
     let master_tflops: f64 = master_gpus.iter().map(|g| g.tflops as f64).sum();
     let free_gpu_fut = tokio::task::spawn_blocking(detect_free_gpu_memory);
 
-    // Discover workers
-    let workers = discovery::discover_workers(cluster_key, discovery_timeout, min_workers).await?;
+    // Discover workers. Broadcast doesn't cross a tailnet, so with --tailscale
+    // the same query is also sent unicast to every online tailnet peer.
+    let unicast_targets = if use_tailscale {
+        match tailscale::tailnet_peer_ips() {
+            Ok(ips) => {
+                log::info!("tailscale: querying {} online tailnet peer(s)", ips.len());
+                ips
+            }
+            Err(e) => {
+                log::warn!("tailscale discovery unavailable ({}), falling back to broadcast only", e);
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    let workers =
+        discovery::discover_workers(cluster_key, discovery_timeout, min_workers, &unicast_targets)
+            .await?;
     if workers.is_empty() {
         log::warn!("no workers discovered — all layers will be loaded locally");
         return Ok(Topology::new());

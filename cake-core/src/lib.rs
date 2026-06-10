@@ -210,6 +210,12 @@ pub struct Args {
     #[arg(long, default_value_t = 10)]
     pub discovery_timeout: u64,
 
+    /// Discover workers through Tailscale: query the local Tailscale daemon
+    /// for tailnet peers and send discovery queries to them directly
+    /// (UDP broadcast does not cross a tailnet). Master-side only.
+    #[arg(long, default_value_t = false)]
+    pub tailscale: bool,
+
     /// Offload expert weights to disk for MoE models larger than available RAM.
     /// Expert weights are streamed from safetensors files on demand via pread().
     /// Non-expert weights (attention, norms, embeddings) remain in RAM.

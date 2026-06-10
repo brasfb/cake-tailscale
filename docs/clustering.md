@@ -39,6 +39,37 @@ This prevents unauthorized nodes from joining the cluster or injecting/intercept
 
 The cluster key is hashed (SHA-256, first 8 hex chars) before being included in mDNS advertisements, so the key itself is never broadcast — only a short hash used for filtering during discovery.
 
+## Clustering over Tailscale
+
+Cake's worker protocol is plain TCP, so it runs over a [Tailscale](https://tailscale.com) tailnet unchanged — including across NATs and different physical networks. Two things differ from a LAN:
+
+- **`.local` mDNS names don't resolve across a tailnet.** Use Tailscale MagicDNS names (`mini2.your-tailnet.ts.net`) or `100.x.y.z` addresses in topology files.
+- **UDP broadcast doesn't cross a tailnet**, so plain zero-config discovery won't find remote peers. Pass `--tailscale` to the master to discover workers through Tailscale instead: cake asks the local Tailscale daemon for the tailnet peer list (`tailscale status --json`) and sends the same discovery query unicast to each peer. Workers need no extra flags.
+
+```sh
+# On each worker (any machine in the tailnet)
+cake run --cluster-key mysecret --name mini2
+
+# On the master
+cake serve /path/to/model --cluster-key mysecret --tailscale
+```
+
+The `tailscale` CLI must be reachable from the master. On macOS with the GUI app, the CLI is bundled but not on `PATH` by default; cake also looks in `/Applications/Tailscale.app/Contents/MacOS/Tailscale`, or you can symlink it:
+
+```sh
+ln -s /Applications/Tailscale.app/Contents/MacOS/Tailscale /usr/local/bin/tailscale
+```
+
+Use a `--cluster-key` even inside a tailnet: Tailscale encrypts transport between nodes, but the key's mutual authentication ensures only your intended nodes join the cluster (a tailnet often contains more devices than the cluster).
+
+For predictable memory use on small nodes, prefer a manual topology with Tailscale hostnames — see `topology-minis.yml` in the repo root for a worked example targeting a cluster of 2014 Intel Mac Minis.
+
+### CPU-only nodes (e.g. Intel Mac Minis)
+
+Old Intel Macs have no usable GPU backend — build with no acceleration features and let the pure-Rust `gemm` path keep F16 weights in F16 (`scripts/build-intel-mac.sh` does this, adding `-C target-cpu=native` for AVX2/FMA). Size models by their **F16 footprint**: GGUF/quantized checkpoints are dequantized at load, so quantization saves download/disk, not RAM. Leave ~2 GB of headroom per node for the OS and KV cache.
+
+Models that work well split across 3–4 such nodes (8–16 GB each): Llama-3.2-1B/3B, Qwen3-0.6B/1.7B/4B, Qwen3.5-0.8B, Gemma3-1B/4B, Phi-4-mini, Granite 3.x 2B. Expect roughly 1–5 tok/s for 1–4B models; 7–8B fits memory-wise but runs at ~1 tok/s.
+
 ## Manual Topology
 
 For full control over layer placement, use a topology file.

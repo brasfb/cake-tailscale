@@ -594,17 +594,37 @@ fn get_broadcast_addresses() -> Vec<Ipv4Addr> {
 
 // ── Master browsing (broadcast query, collect responses) ──────────────────
 
+/// Build the list of destinations for discovery queries: directed subnet
+/// broadcasts plus any unicast targets (e.g. tailnet peers), deduplicated.
+fn query_destinations(
+    broadcast_addrs: &[Ipv4Addr],
+    unicast_targets: &[Ipv4Addr],
+) -> Vec<SocketAddr> {
+    let mut seen = std::collections::HashSet::new();
+    broadcast_addrs
+        .iter()
+        .chain(unicast_targets.iter())
+        .filter(|addr| seen.insert(**addr))
+        .map(|addr| SocketAddr::V4(SocketAddrV4::new(*addr, DISCOVERY_PORT)))
+        .collect()
+}
+
 /// Browse for workers on the network matching the given cluster key.
 ///
 /// Sends periodic UDP broadcast queries, collects responses until `timeout`.
+/// Additionally sends the same query unicast to each address in
+/// `unicast_targets` — used for networks where broadcast doesn't reach peers
+/// (e.g. a Tailscale tailnet, see [`super::tailscale`]).
 /// If `min_workers` is non-zero, stops as soon as that many distinct workers
 /// have been discovered (even if time remains).
 pub async fn discover_workers(
     cluster_key: &str,
     timeout: Duration,
     min_workers: usize,
+    unicast_targets: &[Ipv4Addr],
 ) -> Result<Vec<DiscoveredWorker>> {
     let expected_hash = cluster_hash(cluster_key);
+    let unicast_targets = unicast_targets.to_vec();
 
     if min_workers > 0 {
         log::info!(
@@ -633,7 +653,7 @@ pub async fn discover_workers(
 
         // Collect broadcast addresses: directed subnet broadcasts are more
         // reliable than 255.255.255.255 which may not cross interfaces.
-        let broadcast_addrs = get_broadcast_addresses();
+        let destinations = query_destinations(&get_broadcast_addresses(), &unicast_targets);
 
         let mut workers: HashMap<String, DiscoveredWorker> = HashMap::new();
         let deadline = std::time::Instant::now() + timeout;
@@ -647,10 +667,9 @@ pub async fn discover_workers(
                 break;
             }
 
-            // Send periodic broadcast queries to all known broadcast addresses
+            // Send periodic queries to all destinations (broadcast + unicast)
             if now.duration_since(last_query) >= query_interval {
-                for addr in &broadcast_addrs {
-                    let dest = SocketAddr::V4(SocketAddrV4::new(*addr, DISCOVERY_PORT));
+                for dest in &destinations {
                     let _ = sock.send_to(&query_pkt, dest);
                 }
                 last_query = now;
@@ -730,6 +749,67 @@ pub async fn discover_workers(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── query_destinations ───────────────────────────────────────
+
+    #[test]
+    fn test_query_destinations_merges_broadcast_and_unicast() {
+        let broadcast = vec![Ipv4Addr::new(192, 168, 1, 255)];
+        let unicast = vec![Ipv4Addr::new(100, 64, 0, 2), Ipv4Addr::new(100, 64, 0, 3)];
+        let dests = query_destinations(&broadcast, &unicast);
+        assert_eq!(dests.len(), 3);
+        assert!(dests.iter().all(|d| d.port() == DISCOVERY_PORT));
+        assert_eq!(dests[0].ip().to_string(), "192.168.1.255");
+        assert_eq!(dests[1].ip().to_string(), "100.64.0.2");
+    }
+
+    #[test]
+    fn test_query_destinations_dedupes() {
+        let broadcast = vec![Ipv4Addr::new(255, 255, 255, 255), Ipv4Addr::new(10, 0, 0, 255)];
+        let unicast = vec![Ipv4Addr::new(10, 0, 0, 255), Ipv4Addr::new(10, 0, 0, 255)];
+        let dests = query_destinations(&broadcast, &unicast);
+        assert_eq!(dests.len(), 2);
+    }
+
+    #[test]
+    fn test_query_destinations_empty_unicast() {
+        let broadcast = vec![Ipv4Addr::new(255, 255, 255, 255)];
+        let dests = query_destinations(&broadcast, &[]);
+        assert_eq!(dests.len(), 1);
+    }
+
+    // ── unicast discovery end-to-end (loopback) ──────────────────
+
+    #[test]
+    fn test_unicast_discovery_loopback() {
+        // Worker advertises on UDP 10127; master discovers it purely via a
+        // unicast query to 127.0.0.1 — the path Tailscale discovery uses.
+        let gpus = vec![GpuInfo {
+            name: "Test CPU".to_string(),
+            vram_bytes: 8 * 1024 * 1024 * 1024,
+            tflops: 2.0,
+        }];
+        let _listener = advertise_worker("loopback-worker", 10128, "unicast-test-key", &gpus)
+            .expect("failed to bind discovery listener");
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let workers = rt
+            .block_on(discover_workers(
+                "unicast-test-key",
+                Duration::from_secs(5),
+                1,
+                &[Ipv4Addr::LOCALHOST],
+            ))
+            .expect("discovery failed");
+
+        assert_eq!(workers.len(), 1);
+        assert_eq!(workers[0].name, "loopback-worker");
+        assert_eq!(workers[0].port, 10128);
+        assert_eq!(workers[0].gpus.len(), 1);
+    }
 
     // ── cluster_hash ─────────────────────────────────────────────
 

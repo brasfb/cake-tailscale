@@ -28,6 +28,7 @@ pub use sharding::proto::*;
 pub use sharding::worker::*;
 pub use sharding::discovery;
 pub use sharding::auth;
+pub use sharding::tailscale;
 
 /// Determines if we run in master or worker mode.
 #[derive(clap::ValueEnum, Clone, Debug, Default)]

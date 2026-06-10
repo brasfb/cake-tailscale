@@ -1,4 +1,4 @@
-use cake_core::cake::discovery;
+use cake_core::cake::{discovery, tailscale};
 
 #[divan::bench]
 fn cluster_hash(bencher: divan::Bencher) {
@@ -35,6 +35,24 @@ fn encode_decode_packet(bencher: divan::Bencher) {
             assert!(decoded.is_some());
             pkt // return owned value to avoid borrow issue
         });
+}
+
+#[divan::bench]
+fn tailscale_parse_status_json(bencher: divan::Bencher) {
+    // ~20-peer tailnet status, the size of a realistic home/lab tailnet.
+    let peers: Vec<String> = (0..20)
+        .map(|i| {
+            format!(
+                r#""nodekey:peer{i}": {{"HostName": "node-{i}", "TailscaleIPs": ["100.64.0.{}", "fd7a:115c:a1e0::{i}"], "Online": {}, "OS": "macOS"}}"#,
+                i + 1,
+                i % 4 != 0,
+            )
+        })
+        .collect();
+    let json = format!(r#"{{"Version": "1.80.0", "Peer": {{{}}}}}"#, peers.join(", "));
+    bencher
+        .counter(divan::counter::BytesCount::new(json.len()))
+        .bench_local(|| tailscale::parse_status_json(&json).unwrap());
 }
 
 #[divan::bench]

@@ -289,6 +289,7 @@ async fn run_as_master(mut args: Args) -> Result<()> {
             &model_path,
             timeout,
             args.min_workers,
+            args.tailscale,
         )
         .await?;
         args.topology_override = Some(topology);
