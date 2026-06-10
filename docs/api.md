@@ -26,6 +26,34 @@ cake serve evilsocket/VibeVoice-1.5B --model-type audio-model \
 | `/v1/models` | GET | Any | List loaded models |
 | `/api/v1/topology` | GET | Any | Cluster topology as JSON |
 | `/` | GET | Any | Web UI |
+| `/api/chat` | POST | Text | Chat completion (ollama-compatible, NDJSON) |
+| `/api/generate` | POST | Text | Raw completion (ollama-compatible, NDJSON) |
+| `/api/tags` | GET | Any | Locally cached models (ollama-compatible) |
+| `/api/show` | POST | Any | Model details (ollama-compatible) |
+| `/api/ps` | GET | Any | Currently loaded model (ollama-compatible) |
+| `/api/version` | GET | Any | Server version (ollama-compatible) |
+
+## Ollama-Compatible API
+
+Cake also speaks the [ollama REST API](https://github.com/ollama/ollama/blob/main/docs/api.md), so tools built for ollama (Open WebUI, IDE plugins, etc.) can point at a cake server directly. Differences from real ollama:
+
+- Cake serves **one model per process**. A `model` field that doesn't match the loaded model logs a warning and is otherwise ignored (no 404), and `/api/tags` lists the loaded model first followed by other locally cached models.
+- Model management endpoints (`/api/pull`, `/api/delete`, ...) are not exposed over HTTP — use `cake pull` / `cake rm` on the master instead.
+- `digest` values are a SHA-256 of the model name, not a content hash.
+
+Streaming responses are NDJSON (one JSON object per line) and **default to `stream: true`**, matching ollama semantics:
+
+```sh
+curl http://localhost:8080/api/chat \
+  -d '{"messages": [{"role": "user", "content": "Why is the sky blue?"}]}'
+
+{"model":"...","created_at":"2026-06-10T12:00:00Z","message":{"role":"assistant","content":"The"},"done":false}
+{"model":"...","created_at":"2026-06-10T12:00:01Z","message":{"role":"assistant","content":" sky"},"done":false}
+...
+{"model":"...","created_at":"2026-06-10T12:00:09Z","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","total_duration":9000000000,"eval_count":42,"eval_duration":9000000000}
+```
+
+`/api/generate` takes `prompt` (and optional `system`) instead of `messages` and answers with a `response` field per chunk. Generation length can be capped with `options.num_predict` on either endpoint.
 
 ## Chat Completion
 

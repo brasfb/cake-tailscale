@@ -365,6 +365,12 @@ pub fn test_app_text(
             "/api/v1/image",
             web::post().to(api::image::generate_image::<M>),
         )
+        .route("/api/chat", web::post().to(api::ollama::chat::<M>))
+        .route("/api/generate", web::post().to(api::ollama::generate::<M>))
+        .route("/api/tags", web::get().to(api::ollama::tags::<M>))
+        .route("/api/show", web::post().to(api::ollama::show))
+        .route("/api/ps", web::get().to(api::ollama::ps::<M>))
+        .route("/api/version", web::get().to(api::ollama::version))
 }
 
 pub fn test_app_audio(
@@ -402,6 +408,11 @@ pub fn test_app_audio(
             "/api/v1/image",
             web::post().to(api::image::generate_image::<M>),
         )
+        .route("/api/chat", web::post().to(api::ollama::chat::<M>))
+        .route("/api/generate", web::post().to(api::ollama::generate::<M>))
+        .route("/api/tags", web::get().to(api::ollama::tags::<M>))
+        .route("/api/ps", web::get().to(api::ollama::ps::<M>))
+        .route("/api/version", web::get().to(api::ollama::version))
 }
 
 pub fn test_app_image(
@@ -439,6 +450,11 @@ pub fn test_app_image(
             "/api/v1/image",
             web::post().to(api::image::generate_image::<M>),
         )
+        .route("/api/chat", web::post().to(api::ollama::chat::<M>))
+        .route("/api/generate", web::post().to(api::ollama::generate::<M>))
+        .route("/api/tags", web::get().to(api::ollama::tags::<M>))
+        .route("/api/ps", web::get().to(api::ollama::ps::<M>))
+        .route("/api/version", web::get().to(api::ollama::version))
 }
 
 pub fn test_app_none(
@@ -476,4 +492,9 @@ pub fn test_app_none(
             "/api/v1/image",
             web::post().to(api::image::generate_image::<M>),
         )
+        .route("/api/chat", web::post().to(api::ollama::chat::<M>))
+        .route("/api/generate", web::post().to(api::ollama::generate::<M>))
+        .route("/api/tags", web::get().to(api::ollama::tags::<M>))
+        .route("/api/ps", web::get().to(api::ollama::ps::<M>))
+        .route("/api/version", web::get().to(api::ollama::version))
 }

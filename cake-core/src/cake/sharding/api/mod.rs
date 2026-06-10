@@ -1,5 +1,6 @@
 pub(crate) mod audio;
 pub(crate) mod image;
+pub mod ollama;
 pub mod text;
 mod ui;
 
@@ -85,6 +86,13 @@ pub(crate) async fn start<M: Model>(master: Master<M>) -> anyhow::Result<()> {
                 )
                 // Models
                 .route("/v1/models", web::get().to(list_models::<M>))
+                // Ollama-compatible API (NDJSON streaming)
+                .route("/api/chat", web::post().to(ollama::chat::<M>))
+                .route("/api/generate", web::post().to(ollama::generate::<M>))
+                .route("/api/tags", web::get().to(ollama::tags::<M>))
+                .route("/api/show", web::post().to(ollama::show))
+                .route("/api/ps", web::get().to(ollama::ps::<M>))
+                .route("/api/version", web::get().to(ollama::version))
                 // Audio / TTS
                 .route(
                     "/v1/audio/speech",

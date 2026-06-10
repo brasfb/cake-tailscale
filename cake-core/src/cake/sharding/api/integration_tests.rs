@@ -360,3 +360,220 @@ async fn test_all_endpoints_404_when_no_models() {
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), 404);
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// Ollama-compatible endpoint tests (/api/chat, /api/generate, ...)
+// ═══════════════════════════════════════════════════════════════════
+
+#[actix_web::test]
+async fn test_ollama_version() {
+    let app = test::init_service(test_helpers::test_app_text()).await;
+    let req = test::TestRequest::get().uri("/api/version").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert!(resp.status().is_success());
+
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert!(body["version"].as_str().unwrap().ends_with("-cake"));
+}
+
+#[actix_web::test]
+async fn test_ollama_tags_lists_loaded_model_first() {
+    let app = test::init_service(test_helpers::test_app_text()).await;
+    let req = test::TestRequest::get().uri("/api/tags").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert!(resp.status().is_success());
+
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    let models = body["models"].as_array().unwrap();
+    assert!(!models.is_empty());
+    // MockTextGenerator is the loaded model — must be listed first
+    assert_eq!(models[0]["name"], "mock-text");
+    assert_eq!(models[0]["model"], "mock-text");
+    assert_eq!(models[0]["digest"].as_str().unwrap().len(), 64);
+    assert!(models[0]["modified_at"].as_str().unwrap().ends_with('Z'));
+}
+
+#[actix_web::test]
+async fn test_ollama_ps_shows_loaded_model() {
+    let app = test::init_service(test_helpers::test_app_text()).await;
+    let req = test::TestRequest::get().uri("/api/ps").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert!(resp.status().is_success());
+
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    let models = body["models"].as_array().unwrap();
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0]["name"], "mock-text");
+}
+
+#[actix_web::test]
+async fn test_ollama_ps_empty_when_no_model() {
+    let app = test::init_service(test_helpers::test_app_none()).await;
+    let req = test::TestRequest::get().uri("/api/ps").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert!(resp.status().is_success());
+
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert!(body["models"].as_array().unwrap().is_empty());
+}
+
+#[actix_web::test]
+async fn test_ollama_show_unknown_model_404() {
+    let app = test::init_service(test_helpers::test_app_text()).await;
+    let req = test::TestRequest::post()
+        .uri("/api/show")
+        .set_json(serde_json::json!({"model": "definitely/not-a-cached-model"}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+}
+
+#[actix_web::test]
+async fn test_ollama_chat_blocking() {
+    let app = test::init_service(test_helpers::test_app_text()).await;
+    let req = test::TestRequest::post()
+        .uri("/api/chat")
+        .set_json(serde_json::json!({
+            "messages": [{"role": "user", "content": "Hi"}],
+            "stream": false
+        }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert!(resp.status().is_success());
+
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert_eq!(body["message"]["role"], "assistant");
+    assert_eq!(body["message"]["content"], "Hello world");
+    assert_eq!(body["done"], true);
+    assert!(body["done_reason"].is_string());
+    assert!(body["eval_count"].as_u64().unwrap() > 0);
+    assert!(body["total_duration"].as_u64().is_some());
+}
+
+#[actix_web::test]
+async fn test_ollama_chat_streams_ndjson_by_default() {
+    let app = test::init_service(test_helpers::test_app_text()).await;
+    let req = test::TestRequest::post()
+        .uri("/api/chat")
+        .set_json(serde_json::json!({
+            "messages": [{"role": "user", "content": "Hi"}]
+        }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert!(resp.status().is_success());
+    assert_eq!(
+        resp.headers().get("content-type").unwrap().to_str().unwrap(),
+        "application/x-ndjson"
+    );
+
+    let body = test::read_body(resp).await;
+    let body_str = std::str::from_utf8(&body).unwrap();
+
+    // Every line must be a standalone JSON object
+    let lines: Vec<&str> = body_str.lines().filter(|l| !l.is_empty()).collect();
+    assert!(lines.len() >= 2, "expected at least one token + terminal object");
+    for line in &lines {
+        let _: serde_json::Value = serde_json::from_str(line).unwrap();
+    }
+
+    // All but the last have done:false; the last has done:true + stats
+    let last: serde_json::Value = serde_json::from_str(lines.last().unwrap()).unwrap();
+    assert_eq!(last["done"], true);
+    assert_eq!(last["done_reason"], "stop");
+    assert!(last["eval_count"].as_u64().unwrap() > 0);
+    for line in &lines[..lines.len() - 1] {
+        let chunk: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_eq!(chunk["done"], false);
+        assert!(chunk["message"]["content"].is_string());
+    }
+}
+
+#[actix_web::test]
+async fn test_ollama_chat_ignores_mismatched_model_name() {
+    // Cake serves one model per process: mismatched names warn, not 404
+    let app = test::init_service(test_helpers::test_app_text()).await;
+    let req = test::TestRequest::post()
+        .uri("/api/chat")
+        .set_json(serde_json::json!({
+            "model": "some-other-model",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "stream": false
+        }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert!(resp.status().is_success());
+}
+
+#[actix_web::test]
+async fn test_ollama_chat_no_model_404() {
+    let app = test::init_service(test_helpers::test_app_none()).await;
+    let req = test::TestRequest::post()
+        .uri("/api/chat")
+        .set_json(serde_json::json!({
+            "messages": [{"role": "user", "content": "Hi"}],
+            "stream": false
+        }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+}
+
+#[actix_web::test]
+async fn test_ollama_generate_blocking() {
+    let app = test::init_service(test_helpers::test_app_text()).await;
+    let req = test::TestRequest::post()
+        .uri("/api/generate")
+        .set_json(serde_json::json!({
+            "prompt": "Why is the sky blue?",
+            "stream": false
+        }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert!(resp.status().is_success());
+
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert_eq!(body["response"], "Hello world");
+    assert_eq!(body["done"], true);
+}
+
+#[actix_web::test]
+async fn test_ollama_generate_streams_ndjson() {
+    let app = test::init_service(test_helpers::test_app_text()).await;
+    let req = test::TestRequest::post()
+        .uri("/api/generate")
+        .set_json(serde_json::json!({"prompt": "Hi"}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert!(resp.status().is_success());
+    assert_eq!(
+        resp.headers().get("content-type").unwrap().to_str().unwrap(),
+        "application/x-ndjson"
+    );
+
+    let body = test::read_body(resp).await;
+    let body_str = std::str::from_utf8(&body).unwrap();
+    let lines: Vec<&str> = body_str.lines().filter(|l| !l.is_empty()).collect();
+    let last: serde_json::Value = serde_json::from_str(lines.last().unwrap()).unwrap();
+    assert_eq!(last["done"], true);
+    // generate uses "response", not "message"
+    for line in &lines {
+        let chunk: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert!(chunk["response"].is_string());
+        assert!(chunk.get("message").is_none());
+    }
+}
+
+#[actix_web::test]
+async fn test_ollama_generate_with_options_num_predict() {
+    let app = test::init_service(test_helpers::test_app_text()).await;
+    let req = test::TestRequest::post()
+        .uri("/api/generate")
+        .set_json(serde_json::json!({
+            "prompt": "Hi",
+            "stream": false,
+            "options": {"num_predict": 1}
+        }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert!(resp.status().is_success());
+}

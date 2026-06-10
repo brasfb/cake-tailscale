@@ -118,38 +118,65 @@ pub async fn generate_text<M: Model>(
     }
 }
 
-async fn generate_text_blocking<M: Model>(
-    state: web::Data<Arc<RwLock<Master<M>>>>,
-    request: ChatRequest,
-) -> HttpResponse {
+/// Why a blocking generation run failed.
+pub(crate) enum GenerationError {
+    NoModel,
+    Internal(String),
+}
+
+impl GenerationError {
+    pub(crate) fn to_response(&self) -> HttpResponse {
+        match self {
+            GenerationError::NoModel => HttpResponse::NotFound()
+                .json(serde_json::json!({"error": "No text model loaded"})),
+            GenerationError::Internal(e) => {
+                HttpResponse::InternalServerError().json(serde_json::json!({"error": e}))
+            }
+        }
+    }
+}
+
+/// Result of a completed blocking generation run.
+pub(crate) struct GenerationOutcome {
+    pub text: String,
+    pub finish_reason: String,
+    pub completion_tokens: usize,
+}
+
+/// Run a full generation to completion: reset the master, feed `messages`,
+/// generate up to `max_tokens`, and disconnect. Shared by the OpenAI and
+/// ollama non-streaming endpoints.
+pub(crate) async fn run_generation<M: Model>(
+    state: &web::Data<Arc<RwLock<Master<M>>>>,
+    messages: Vec<Message>,
+    max_tokens: Option<usize>,
+) -> Result<GenerationOutcome, GenerationError> {
     let mut master = state.write().await;
 
     if !master.model.as_ref().is_some_and(|m| m.output_modality() == OutputModality::Text) {
-        return HttpResponse::NotFound()
-            .json(serde_json::json!({"error": "No text model loaded"}));
+        return Err(GenerationError::NoModel);
     }
 
-    if let Err(e) = master.reset() {
-        return HttpResponse::InternalServerError().json(serde_json::json!({"error": format!("{e}")}));
-    }
+    master
+        .reset()
+        .map_err(|e| GenerationError::Internal(format!("{e}")))?;
 
-    let num_messages = request.messages.len();
     let model = master.model.as_mut().unwrap();
-    for message in request.messages {
-        if let Err(e) = model.add_message(message) {
-            return HttpResponse::InternalServerError().json(serde_json::json!({"error": format!("{e}")}));
-        }
+    for message in messages {
+        model
+            .add_message(message)
+            .map_err(|e| GenerationError::Internal(format!("{e}")))?;
     }
 
-    let mut resp = String::new();
+    let mut text = String::new();
     let mut finish_reason = "length".to_string();
 
     let gen_result = master
-        .generate_text(request.max_tokens, |data| {
+        .generate_text(max_tokens, |data| {
             if data.is_empty() {
                 finish_reason = "stop".to_string();
             } else {
-                resp += data;
+                text += data;
             }
         })
         .await;
@@ -164,37 +191,28 @@ async fn generate_text_blocking<M: Model>(
 
     let _ = master.goodbye().await;
 
-    if let Err(e) = gen_result {
-        return HttpResponse::InternalServerError().json(serde_json::json!({"error": format!("{e}")}));
-    }
+    gen_result.map_err(|e| GenerationError::Internal(format!("{e}")))?;
 
-    let response = ChatResponse::new(
-        M::MODEL_NAME.to_string(),
-        resp,
-        num_messages,
-        completion_tokens,
+    Ok(GenerationOutcome {
+        text,
         finish_reason,
-    );
-
-    HttpResponse::Ok().json(response)
+        completion_tokens,
+    })
 }
 
-async fn generate_text_stream<M: Model>(
+/// Spawn a generation task feeding tokens into an unbounded channel.
+/// `Some(token)` per generated piece, `None` exactly once at the end
+/// (whether by stop token, token budget, or error). Shared by the OpenAI
+/// SSE and ollama NDJSON streaming endpoints.
+pub(crate) fn spawn_generation<M: Model>(
     state: web::Data<Arc<RwLock<Master<M>>>>,
-    request: ChatRequest,
-) -> HttpResponse {
-    let id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
-    let created = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let model = M::MODEL_NAME.to_string();
+    messages: Vec<Message>,
+    max_tokens: Option<usize>,
+) -> tokio::sync::mpsc::UnboundedReceiver<Option<String>> {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Option<String>>();
 
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Option<String>>();
-
-    let state_clone = state.clone();
     tokio::spawn(async move {
-        let mut master = state_clone.write().await;
+        let mut master = state.write().await;
 
         if let Err(e) = master.reset() {
             log::error!("reset error: {e}");
@@ -210,7 +228,7 @@ async fn generate_text_stream<M: Model>(
                 return;
             }
         };
-        for message in request.messages {
+        for message in messages {
             if let Err(e) = model.add_message(message) {
                 log::error!("add_message error: {e}");
                 let _ = tx.send(None);
@@ -219,7 +237,7 @@ async fn generate_text_stream<M: Model>(
         }
 
         if let Err(e) = master
-            .generate_text(request.max_tokens, |data| {
+            .generate_text(max_tokens, |data| {
                 if data.is_empty() {
                     let _ = tx.send(None);
                 } else {
@@ -234,6 +252,43 @@ async fn generate_text_stream<M: Model>(
 
         let _ = master.goodbye().await;
     });
+
+    rx
+}
+
+async fn generate_text_blocking<M: Model>(
+    state: web::Data<Arc<RwLock<Master<M>>>>,
+    request: ChatRequest,
+) -> HttpResponse {
+    let num_messages = request.messages.len();
+
+    match run_generation(&state, request.messages, request.max_tokens).await {
+        Ok(outcome) => {
+            let response = ChatResponse::new(
+                M::MODEL_NAME.to_string(),
+                outcome.text,
+                num_messages,
+                outcome.completion_tokens,
+                outcome.finish_reason,
+            );
+            HttpResponse::Ok().json(response)
+        }
+        Err(e) => e.to_response(),
+    }
+}
+
+async fn generate_text_stream<M: Model>(
+    state: web::Data<Arc<RwLock<Master<M>>>>,
+    request: ChatRequest,
+) -> HttpResponse {
+    let id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
+    let created = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let model = M::MODEL_NAME.to_string();
+
+    let mut rx = spawn_generation(state.clone(), request.messages, request.max_tokens);
 
     let stream = async_stream::stream! {
         // Send initial role chunk
