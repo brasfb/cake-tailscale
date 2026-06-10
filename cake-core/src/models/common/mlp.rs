@@ -30,6 +30,32 @@ impl MLP {
         self.backend.linear_forward(&x, &self.down_proj_weight, None)
     }
 
+    /// Load Granite's shared MLP: weights are pre-fused as `input_linear`
+    /// ([2*intermediate, hidden], gate and up halves) and `output_linear`.
+    /// `vb` must already point at the `shared_mlp` prefix.
+    pub fn load_granite_shared(
+        vb: VarBuilder,
+        cfg: &super::Config,
+        backend: Arc<dyn ComputeBackend>,
+    ) -> Result<Self> {
+        let h_size = cfg.hidden_size;
+        let i_size = cfg.intermediate_size;
+
+        let gate_up_w = vb.pp("input_linear").get((2 * i_size, h_size), "weight")?;
+        let gate_up_proj_weight = backend.preprocess_linear_weight(&gate_up_w)?;
+
+        let down_w = vb.pp("output_linear").get((h_size, i_size), "weight")?;
+        let down_proj_weight = backend.preprocess_linear_weight(&down_w)?;
+
+        Ok(Self {
+            gate_up_proj_weight,
+            down_proj_weight,
+            intermediate_size: i_size,
+            use_gelu: cfg.use_gelu_mlp,
+            backend,
+        })
+    }
+
     /// Load this block from the VarBuilder given the specific configuration.
     pub fn load(vb: VarBuilder, cfg: &super::Config, backend: Arc<dyn ComputeBackend>) -> Result<Self> {
         let h_size = cfg.hidden_size;

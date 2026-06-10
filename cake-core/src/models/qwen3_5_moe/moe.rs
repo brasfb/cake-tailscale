@@ -423,6 +423,10 @@ mod tests {
             norm_topk_prob: true,
             shared_expert_intermediate_size: Some(48),
             attn_output_gate: false,
+            attn_scale: None,
+            residual_scale: None,
+            logits_scale: None,
+            granite_shared_mlp: false,
         }
     }
 

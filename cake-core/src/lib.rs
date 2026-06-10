@@ -33,6 +33,8 @@ macro_rules! dispatch_text_model {
             $crate::TextModelArch::Mistral => $wrapper::<$crate::models::mistral::Mistral>::new($ctx).await?.run().await,
             #[cfg(feature = "gemma3")]
             $crate::TextModelArch::Gemma3 => $wrapper::<$crate::models::gemma3::Gemma3>::new($ctx).await?.run().await,
+            #[cfg(feature = "granite")]
+            $crate::TextModelArch::Granite => $wrapper::<$crate::models::granite::Granite>::new($ctx).await?.run().await,
             #[cfg(feature = "falcon3")]
             $crate::TextModelArch::Falcon3 => $wrapper::<$crate::models::falcon3::Falcon3>::new($ctx).await?.run().await,
             #[cfg(feature = "olmo2")]
@@ -71,6 +73,8 @@ macro_rules! dispatch_config_load {
             $crate::TextModelArch::Mistral => $crate::models::mistral::MistralConfig::from_path($config_path)?.into_config(),
             #[cfg(feature = "gemma3")]
             $crate::TextModelArch::Gemma3 => $crate::models::gemma3::Gemma3Config::from_path($config_path)?.into_config(),
+            #[cfg(feature = "granite")]
+            $crate::TextModelArch::Granite => $crate::models::granite::GraniteConfig::from_path($config_path)?.into_config(),
             #[cfg(feature = "falcon3")]
             $crate::TextModelArch::Falcon3 => $crate::models::falcon3::Falcon3Config::from_path($config_path)?.into_config(),
             #[cfg(feature = "olmo2")]
@@ -135,6 +139,8 @@ pub enum TextModelArch {
     Mistral,
     /// Gemma 3 (interleaved local/global attention)
     Gemma3,
+    /// IBM Granite dense (Llama-style + muP multipliers)
+    Granite,
     /// Falcon3 (standard GQA, Apache 2.0)
     Falcon3,
     /// OLMo 2 (post-norm, QK-norm)

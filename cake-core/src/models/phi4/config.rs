@@ -95,6 +95,10 @@ impl Phi4Config {
             norm_topk_prob: false,
             shared_expert_intermediate_size: None,
             attn_output_gate: false,
+            attn_scale: None,
+            residual_scale: None,
+            logits_scale: None,
+            granite_shared_mlp: false,
             global_layers: vec![],
         }
     }

@@ -32,6 +32,8 @@ pub struct CausalSelfAttention {
     sliding_window: Option<usize>,
     /// Whether to apply Rotary Position Embeddings. False for Gemma3 local layers.
     use_rope: bool,
+    /// Softmax scale: cfg.attn_scale override (Granite) or 1/sqrt(head_dim).
+    softmax_scale: f32,
     /// Compute backend for routing matmuls through GPU-accelerated paths.
     backend: Arc<dyn ComputeBackend>,
 }
@@ -144,6 +146,9 @@ impl CausalSelfAttention {
             pre_reshape_qk_norm: cfg.pre_reshape_qk_norm,
             sliding_window,
             use_rope,
+            softmax_scale: cfg
+                .attn_scale
+                .unwrap_or_else(|| 1.0 / (head_dim as f32).sqrt()),
             backend,
         })
     }
@@ -271,7 +276,7 @@ impl CausalSelfAttention {
             if matches!(q.device(), candle_core::Device::Cuda(_))
                 && matches!(q.dtype(), DType::F16 | DType::BF16)
             {
-                let scale = 1.0 / (self.head_dim as f32).sqrt();
+                let scale = self.softmax_scale;
                 break 'attn crate::utils::flash_attn::flash_attention(
                     &q, &k, &v, scale, seq_len > 1,
                 ).map_err(|e| anyhow!("flash_attn: {e}"))?;
@@ -284,7 +289,7 @@ impl CausalSelfAttention {
             // Try SDPA first, fall back to manual if threadgroup memory exceeded
             #[cfg(feature = "metal")]
             if matches!(q.device(), candle_core::Device::Metal(_)) {
-                let scale = 1.0 / (self.head_dim as f32).sqrt();
+                let scale = self.softmax_scale;
                 // Try F32 SDPA (fastest when it works)
                 let q32 = q.to_dtype(DType::F32)?;
                 let k32 = k.to_dtype(DType::F32)?;
@@ -310,7 +315,7 @@ impl CausalSelfAttention {
                 .repeat_kv(v)
                 .map_err(|e| anyhow!("repeat_kv(v) -> {e}"))?;
 
-            let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
+            let att = (q.matmul(&k.t()?)? * self.softmax_scale as f64)?;
             let att = if seq_len == 1 {
                 att
             } else {

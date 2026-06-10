@@ -45,6 +45,10 @@ pub fn test_config() -> Config {
         norm_topk_prob: false,
         shared_expert_intermediate_size: None,
         attn_output_gate: false,
+        attn_scale: None,
+        residual_scale: None,
+        logits_scale: None,
+        granite_shared_mlp: false,
     }
 }
 
@@ -117,6 +121,10 @@ pub fn test_config_gdn() -> Config {
         norm_topk_prob: false,
         shared_expert_intermediate_size: None,
         attn_output_gate: false,
+        attn_scale: None,
+        residual_scale: None,
+        logits_scale: None,
+        granite_shared_mlp: false,
     }
 }
 
@@ -369,6 +377,55 @@ pub fn make_vb_standard_block(
             make_tensor(&[h, i], 38),
         );
     }
+
+    VarBuilder::from_tensors(map, DType::F32, &Device::Cpu)
+}
+
+/// Build a VarBuilder for the dense GraniteMoeHybrid layout: standard attention
+/// plus a fused `shared_mlp.input_linear` / `shared_mlp.output_linear` MLP.
+#[allow(dead_code)]
+pub fn make_vb_granite_shared_block(cfg: &Config, layer_name: &str) -> VarBuilder<'static> {
+    let h = cfg.hidden_size;
+    let head_dim = cfg.head_dim.unwrap_or(h / cfg.num_attention_heads);
+    let size_q = head_dim * cfg.num_attention_heads;
+    let size_kv = head_dim * cfg.num_key_value_heads;
+    let i = cfg.intermediate_size;
+
+    let mut map: HashMap<String, Tensor> = HashMap::new();
+    let prefix = layer_name;
+
+    map.insert(
+        format!("{prefix}.input_layernorm.weight"),
+        Tensor::ones(h, DType::F32, &Device::Cpu).unwrap(),
+    );
+    map.insert(
+        format!("{prefix}.post_attention_layernorm.weight"),
+        Tensor::ones(h, DType::F32, &Device::Cpu).unwrap(),
+    );
+    map.insert(
+        format!("{prefix}.self_attn.q_proj.weight"),
+        make_tensor(&[size_q, h], 30),
+    );
+    map.insert(
+        format!("{prefix}.self_attn.k_proj.weight"),
+        make_tensor(&[size_kv, h], 31),
+    );
+    map.insert(
+        format!("{prefix}.self_attn.v_proj.weight"),
+        make_tensor(&[size_kv, h], 32),
+    );
+    map.insert(
+        format!("{prefix}.self_attn.o_proj.weight"),
+        make_tensor(&[h, size_q], 33),
+    );
+    map.insert(
+        format!("{prefix}.shared_mlp.input_linear.weight"),
+        make_tensor(&[2 * i, h], 36),
+    );
+    map.insert(
+        format!("{prefix}.shared_mlp.output_linear.weight"),
+        make_tensor(&[h, i], 38),
+    );
 
     VarBuilder::from_tensors(map, DType::F32, &Device::Cpu)
 }

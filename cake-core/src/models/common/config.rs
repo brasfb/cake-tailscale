@@ -147,6 +147,17 @@ pub struct Config {
     /// Whether the attention output gate is enabled (Qwen3.5 MoE full-attention layers):
     /// q_proj outputs 2× heads; the second half gates the attention output via sigmoid.
     pub attn_output_gate: bool,
+    /// Attention softmax scale override (Granite `attention_multiplier`).
+    /// None = the standard 1/sqrt(head_dim).
+    pub attn_scale: Option<f32>,
+    /// Multiplier applied to each sublayer output before its residual add
+    /// (Granite `residual_multiplier`). None = 1.0.
+    pub residual_scale: Option<f64>,
+    /// Divisor applied to lm_head logits (Granite `logits_scaling`). None = 1.0.
+    pub logits_scale: Option<f64>,
+    /// Load MLP weights from Granite's fused `shared_mlp.input_linear` /
+    /// `shared_mlp.output_linear` tensors instead of `mlp.{gate,up,down}_proj`.
+    pub granite_shared_mlp: bool,
 }
 
 /// Load an RMS norm weight tensor, optionally applying the residual pattern `(1 + weight)`.

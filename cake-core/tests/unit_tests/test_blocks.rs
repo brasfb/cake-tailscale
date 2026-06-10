@@ -445,6 +445,10 @@ fn qwen3_5_config() -> Config {
         norm_topk_prob: false,
         shared_expert_intermediate_size: None,
         attn_output_gate: false,
+        attn_scale: None,
+        residual_scale: None,
+        logits_scale: None,
+        granite_shared_mlp: false,
     }
 }
 
@@ -1083,4 +1087,219 @@ async fn test_qwen3_5_moe_linear_block_generation() {
     let x = make_tensor(&[1, 1, 64], 601);
     let y = block.forward_mut(&x, 0, 0, &mut ctx).await.unwrap();
     assert_eq!(y.dims(), &[1, 1, 64]);
+}
+
+// ---------------------------------------------------------------------------
+// GraniteBlock tests (dense Granite: muP multipliers, optional shared MLP)
+// ---------------------------------------------------------------------------
+
+fn granite_config() -> Config {
+    Config {
+        // Granite muP-style multipliers (values shaped like granite-3.3)
+        attn_scale: Some(0.03125),
+        residual_scale: Some(0.22),
+        logits_scale: Some(8.0),
+        ..test_config()
+    }
+}
+
+/// Build a VarBuilder for the dense GraniteMoeHybrid layout: standard attention
+/// plus a fused `shared_mlp.input_linear` / `shared_mlp.output_linear` MLP.
+fn make_vb_granite_shared_block(cfg: &Config, layer_name: &str) -> VarBuilder<'static> {
+    let h = cfg.hidden_size;
+    let head_dim = cfg.head_dim.unwrap_or(h / cfg.num_attention_heads);
+    let size_q = head_dim * cfg.num_attention_heads;
+    let size_kv = head_dim * cfg.num_key_value_heads;
+    let i = cfg.intermediate_size;
+
+    let mut map: HashMap<String, Tensor> = HashMap::new();
+    let prefix = layer_name;
+
+    map.insert(
+        format!("{prefix}.input_layernorm.weight"),
+        Tensor::ones(h, DType::F32, &Device::Cpu).unwrap(),
+    );
+    map.insert(
+        format!("{prefix}.post_attention_layernorm.weight"),
+        Tensor::ones(h, DType::F32, &Device::Cpu).unwrap(),
+    );
+    map.insert(
+        format!("{prefix}.self_attn.q_proj.weight"),
+        make_tensor(&[size_q, h], 30),
+    );
+    map.insert(
+        format!("{prefix}.self_attn.k_proj.weight"),
+        make_tensor(&[size_kv, h], 31),
+    );
+    map.insert(
+        format!("{prefix}.self_attn.v_proj.weight"),
+        make_tensor(&[size_kv, h], 32),
+    );
+    map.insert(
+        format!("{prefix}.self_attn.o_proj.weight"),
+        make_tensor(&[h, size_q], 33),
+    );
+    map.insert(
+        format!("{prefix}.shared_mlp.input_linear.weight"),
+        make_tensor(&[2 * i, h], 36),
+    );
+    map.insert(
+        format!("{prefix}.shared_mlp.output_linear.weight"),
+        make_tensor(&[h, i], 38),
+    );
+
+    VarBuilder::from_tensors(map, DType::F32, &Device::Cpu)
+}
+
+#[tokio::test]
+async fn test_granite_block_prefill() {
+    use cake_core::models::granite::GraniteBlock;
+
+    let cfg = granite_config();
+    let layer_name = "model.layers.0";
+    let vb = make_vb_standard_block(&cfg, layer_name, &[], false, false);
+    let mut ctx = make_context(cfg, vb);
+    let mut block = *GraniteBlock::load(layer_name.to_string(), &ctx).unwrap();
+    let x = make_tensor(&[1, 4, 64], 700);
+    let y = block.forward_mut(&x, 0, 0, &mut ctx).await.unwrap();
+    assert_eq!(y.dims(), &[1, 4, 64]);
+}
+
+#[tokio::test]
+async fn test_granite_block_generation() {
+    use cake_core::models::granite::GraniteBlock;
+
+    let cfg = granite_config();
+    let layer_name = "model.layers.0";
+    let vb = make_vb_standard_block(&cfg, layer_name, &[], false, false);
+    let mut ctx = make_context(cfg, vb);
+    let mut block = *GraniteBlock::load(layer_name.to_string(), &ctx).unwrap();
+    let x = make_tensor(&[1, 1, 64], 701);
+    let y = block.forward_mut(&x, 0, 0, &mut ctx).await.unwrap();
+    assert_eq!(y.dims(), &[1, 1, 64]);
+}
+
+#[tokio::test]
+async fn test_granite_block_prefill_then_generate() {
+    use cake_core::models::granite::GraniteBlock;
+
+    let cfg = granite_config();
+    let layer_name = "model.layers.0";
+    let vb = make_vb_standard_block(&cfg, layer_name, &[], false, false);
+    let mut ctx = make_context(cfg, vb);
+    let mut block = *GraniteBlock::load(layer_name.to_string(), &ctx).unwrap();
+
+    let x = make_tensor(&[1, 4, 64], 702);
+    let y = block.forward_mut(&x, 0, 0, &mut ctx).await.unwrap();
+    assert_eq!(y.dims(), &[1, 4, 64]);
+
+    let x = make_tensor(&[1, 1, 64], 703);
+    let y = block.forward_mut(&x, 4, 0, &mut ctx).await.unwrap();
+    assert_eq!(y.dims(), &[1, 1, 64]);
+}
+
+#[tokio::test]
+async fn test_granite_shared_mlp_block_prefill() {
+    use cake_core::models::granite::GraniteBlock;
+
+    let cfg = Config {
+        granite_shared_mlp: true,
+        ..granite_config()
+    };
+    let layer_name = "model.layers.0";
+    let vb = make_vb_granite_shared_block(&cfg, layer_name);
+    let mut ctx = make_context(cfg, vb);
+    let mut block = *GraniteBlock::load(layer_name.to_string(), &ctx).unwrap();
+    let x = make_tensor(&[1, 4, 64], 704);
+    let y = block.forward_mut(&x, 0, 0, &mut ctx).await.unwrap();
+    assert_eq!(y.dims(), &[1, 4, 64]);
+}
+
+#[tokio::test]
+async fn test_granite_shared_mlp_block_generation() {
+    use cake_core::models::granite::GraniteBlock;
+
+    let cfg = Config {
+        granite_shared_mlp: true,
+        ..granite_config()
+    };
+    let layer_name = "model.layers.0";
+    let vb = make_vb_granite_shared_block(&cfg, layer_name);
+    let mut ctx = make_context(cfg, vb);
+    let mut block = *GraniteBlock::load(layer_name.to_string(), &ctx).unwrap();
+    let x = make_tensor(&[1, 1, 64], 705);
+    let y = block.forward_mut(&x, 0, 0, &mut ctx).await.unwrap();
+    assert_eq!(y.dims(), &[1, 1, 64]);
+}
+
+/// With neutral multipliers (attn_scale = 1/sqrt(head_dim), residual_scale = 1)
+/// GraniteBlock must compute exactly what the generic Transformer computes —
+/// proving the multiplier plumbing only changes behavior when configured.
+#[tokio::test]
+async fn test_granite_block_neutral_multipliers_match_transformer() {
+    use cake_core::models::common::Transformer;
+    use cake_core::models::granite::GraniteBlock;
+
+    let head_dim = 64usize / 4;
+    let neutral = Config {
+        attn_scale: Some(1.0 / (head_dim as f32).sqrt()),
+        residual_scale: Some(1.0),
+        ..test_config()
+    };
+    let layer_name = "model.layers.0";
+
+    let vb = make_vb_standard_block(&neutral, layer_name, &[], false, false);
+    let mut ctx_granite = make_context(neutral, vb);
+    let mut granite = *GraniteBlock::load(layer_name.to_string(), &ctx_granite).unwrap();
+
+    let vb = make_vb_standard_block(&test_config(), layer_name, &[], false, false);
+    let mut ctx_plain = make_context(test_config(), vb);
+    let mut plain = *Transformer::load(layer_name.to_string(), &ctx_plain).unwrap();
+
+    let x = make_tensor(&[1, 4, 64], 706);
+    let y_granite = granite.forward_mut(&x, 0, 0, &mut ctx_granite).await.unwrap();
+    let y_plain = plain.forward_mut(&x, 0, 0, &mut ctx_plain).await.unwrap();
+
+    let diff = (y_granite - y_plain)
+        .unwrap()
+        .abs()
+        .unwrap()
+        .max_all()
+        .unwrap()
+        .to_scalar::<f32>()
+        .unwrap();
+    assert!(diff < 1e-6, "neutral Granite diverged from Transformer: {diff}");
+}
+
+/// The residual multiplier must actually scale sublayer outputs: a Granite
+/// block with residual_scale != 1 must differ from one with neutral scales.
+#[tokio::test]
+async fn test_granite_block_multipliers_change_output() {
+    use cake_core::models::granite::GraniteBlock;
+
+    let layer_name = "model.layers.0";
+
+    let scaled = granite_config();
+    let vb = make_vb_standard_block(&scaled, layer_name, &[], false, false);
+    let mut ctx_scaled = make_context(scaled, vb);
+    let mut block_scaled = *GraniteBlock::load(layer_name.to_string(), &ctx_scaled).unwrap();
+
+    let neutral = test_config();
+    let vb = make_vb_standard_block(&neutral, layer_name, &[], false, false);
+    let mut ctx_neutral = make_context(neutral, vb);
+    let mut block_neutral = *GraniteBlock::load(layer_name.to_string(), &ctx_neutral).unwrap();
+
+    let x = make_tensor(&[1, 4, 64], 707);
+    let y_scaled = block_scaled.forward_mut(&x, 0, 0, &mut ctx_scaled).await.unwrap();
+    let y_neutral = block_neutral.forward_mut(&x, 0, 0, &mut ctx_neutral).await.unwrap();
+
+    let diff = (y_scaled - y_neutral)
+        .unwrap()
+        .abs()
+        .unwrap()
+        .max_all()
+        .unwrap()
+        .to_scalar::<f32>()
+        .unwrap();
+    assert!(diff > 1e-6, "multipliers had no effect on the output");
 }

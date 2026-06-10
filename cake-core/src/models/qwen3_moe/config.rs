@@ -100,6 +100,10 @@ impl Qwen3MoeConfig {
             norm_topk_prob: self.norm_topk_prob,
             shared_expert_intermediate_size: None,
             attn_output_gate: false,
+            attn_scale: None,
+            residual_scale: None,
+            logits_scale: None,
+            granite_shared_mlp: false,
         }
     }
 }

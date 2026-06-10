@@ -16,6 +16,8 @@ pub mod exaone4;
 pub mod falcon3;
 #[cfg(feature = "gemma3")]
 pub mod gemma3;
+#[cfg(feature = "granite")]
+pub mod granite;
 #[cfg(feature = "llama")]
 pub mod llama3;
 #[cfg(feature = "mistral")]

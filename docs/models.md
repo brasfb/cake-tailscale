@@ -15,6 +15,8 @@
 | Phi-4 | `microsoft/phi-4` | `phi4` (default) | 14B, same family as Phi-4-mini |
 | Mistral | `evilsocket/Mistral-7B-Instruct-v0.3` | `mistral` (default) | Standard GQA, optional sliding window |
 | Gemma 3 | `google/gemma-3-1b-it` | `gemma3` (default) | Interleaved local/global attention, GELU-tanh MLP |
+| Granite 3.x | `ibm-granite/granite-3.3-2b-instruct` | `granite` (default) | Llama-style + muP multipliers (embedding/attention/residual/logits) |
+| Granite 4.0 (dense) | `ibm-granite/granite-4.0-1b` | `granite` (default) | Non-hybrid Nano variants only (fused shared MLP); Mamba-2 hybrid/MoE not supported |
 | Falcon3 | `evilsocket/Falcon3-1B-Instruct` | `falcon3` (default) | Standard GQA, Apache 2.0 |
 | OLMo 2 | `allenai/OLMo-2-1124-7B` | `olmo2` (default) | Post-norm, QK-norm, fully open weights+data |
 | EXAONE 4.0 | `evilsocket/EXAONE-4.0-1.2B` | `exaone4` (default) | 3:1 local/global hybrid, QK-norm |

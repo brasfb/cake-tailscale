@@ -144,6 +144,10 @@ impl Qwen3_5MoeConfig {
             norm_topk_prob: true,
             shared_expert_intermediate_size: Some(tc.shared_expert_intermediate_size),
             attn_output_gate: tc.attn_output_gate,
+            attn_scale: None,
+            residual_scale: None,
+            logits_scale: None,
+            granite_shared_mlp: false,
         }
     }
 }

@@ -98,6 +98,8 @@ pub(crate) fn arch_str_to_text_model_arch(arch: &str) -> TextModelArch {
         "MistralForCausalLM" => TextModelArch::Mistral,
         #[cfg(feature = "gemma3")]
         "Gemma3ForCausalLM" => TextModelArch::Gemma3,
+        #[cfg(feature = "granite")]
+        "GraniteForCausalLM" | "GraniteMoeHybridForCausalLM" => TextModelArch::Granite,
         #[cfg(feature = "falcon3")]
         "FalconForCausalLM" => TextModelArch::Falcon3,
         #[cfg(feature = "olmo2")]
@@ -321,6 +323,10 @@ impl Context {
                                 norm_topk_prob: false,
                                 shared_expert_intermediate_size: None,
                                 attn_output_gate: false,
+                                attn_scale: None,
+                                residual_scale: None,
+                                logits_scale: None,
+                                granite_shared_mlp: false,
                             }
                         }
                         #[cfg(not(feature = "luxtts"))]
@@ -673,6 +679,19 @@ mod tests {
         assert_eq!(
             arch_str_to_text_model_arch("Gemma3ForCausalLM"),
             TextModelArch::Gemma3
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "granite")]
+    fn arch_str_granite_both_layouts() {
+        assert_eq!(
+            arch_str_to_text_model_arch("GraniteForCausalLM"),
+            TextModelArch::Granite
+        );
+        assert_eq!(
+            arch_str_to_text_model_arch("GraniteMoeHybridForCausalLM"),
+            TextModelArch::Granite
         );
     }
 

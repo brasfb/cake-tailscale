@@ -212,3 +212,57 @@ fn qwen3_5_moe_block(bencher: divan::Bencher) {
         rt.block_on(block.forward_mut(&x, 0, 0, &mut ctx)).unwrap()
     });
 }
+
+// -- GraniteBlock (dense Granite: muP multipliers, optional shared MLP) --
+
+fn granite_config() -> Config {
+    Config {
+        attn_scale: Some(0.03125),
+        residual_scale: Some(0.22),
+        logits_scale: Some(8.0),
+        ..test_config()
+    }
+}
+
+#[divan::bench(args = [1, 8, 64])]
+fn granite_block(bencher: divan::Bencher, seq_len: usize) {
+    let cfg = Config {
+        max_seq_len: 64,
+        ..granite_config()
+    };
+    let layer_name = "model.layers.0";
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    bencher.bench_local(|| {
+        let vb = make_vb_standard_block(&cfg, layer_name, &[], false, false);
+        let mut ctx = make_context(cfg.clone(), vb);
+        let mut block =
+            *cake_core::models::granite::GraniteBlock::load(layer_name.to_string(), &ctx).unwrap();
+        let x = make_tensor(&[1, seq_len, 64], 910);
+        rt.block_on(block.forward_mut(&x, 0, 0, &mut ctx)).unwrap()
+    });
+}
+
+#[divan::bench(args = [1, 8, 64])]
+fn granite_shared_mlp_block(bencher: divan::Bencher, seq_len: usize) {
+    let cfg = Config {
+        max_seq_len: 64,
+        granite_shared_mlp: true,
+        ..granite_config()
+    };
+    let layer_name = "model.layers.0";
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    bencher.bench_local(|| {
+        let vb = make_vb_granite_shared_block(&cfg, layer_name);
+        let mut ctx = make_context(cfg.clone(), vb);
+        let mut block =
+            *cake_core::models::granite::GraniteBlock::load(layer_name.to_string(), &ctx).unwrap();
+        let x = make_tensor(&[1, seq_len, 64], 911);
+        rt.block_on(block.forward_mut(&x, 0, 0, &mut ctx)).unwrap()
+    });
+}

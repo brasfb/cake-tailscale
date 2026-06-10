@@ -345,11 +345,15 @@ impl TextModelBase {
             .contiguous()
             .map_err(|e| anyhow!("error in x.i.contiguous: {e}"))?;
 
-        let logits = self
+        let mut logits = self
             .ctx
             .backend
             .linear_forward(&x, &self.lm_head_weight, None)
             .map_err(|e| anyhow!("error in lm_head.forward: {e}"))?;
+        // Granite scales logits down by `logits_scaling` after the lm_head.
+        if let Some(scale) = self.ctx.config.as_ref().and_then(|c| c.logits_scale) {
+            logits = (logits / scale).map_err(|e| anyhow!("error in logits scaling: {e}"))?;
+        }
         // Note: no explicit sync needed here — the CPU-side logits sampling
         // (to_vec1 in LogitsProcessor) implicitly synchronizes the Metal command buffer.
         let head_elapsed = head_start.elapsed();
