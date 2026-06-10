@@ -22,6 +22,11 @@
 | EXAONE 4.0 | `evilsocket/EXAONE-4.0-1.2B` | `exaone4` (default) | 3:1 local/global hybrid, QK-norm |
 | DeepSeek-R1 (distilled) | `deepseek-ai/DeepSeek-R1-Distill-Llama-8B` | `llama` (default) | LLaMA or Qwen2.5 base |
 
+### Not yet supported
+
+- **Gemma 4** (`Gemma4ForConditionalGeneration`): the E2B/E4B variants require per-layer embeddings, KV sharing across the last N layers, different head dims for global vs sliding layers, and per-layer-type RoPE — a substantial new mechanism set. On CPU-only clusters Gemma 3 1B/4B remains the recommended Gemma option.
+- **Granite 4.0-H** (hybrid): Mamba-2 SSD layers and Granite MoE are not implemented; the dense `granite-4.0-350m/1b` Nano variants work.
+
 ## Image Models
 
 | Model | HuggingFace ID | Architecture | VRAM | Feature Flag |

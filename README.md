@@ -21,10 +21,10 @@ Cake is a **multimodal AI inference server** written in Rust that can run models
 ## Key Features
 
 - **Multi Modal** — [Text generation](docs/models.md), [image generation](docs/image_generation.md) (Stable Diffusion, FLUX), and [voice synthesis](docs/voice_generation.md) (VibeVoice TTS with voice cloning).
-- **Multi Model** — [15 text model families](docs/models.md), 6 image model variants, and 2 TTS models. Architecture auto-detected from HuggingFace checkpoints.
+- **Multi Model** — [16 text model families](docs/models.md), 6 image model variants, and 2 TTS models. Architecture auto-detected from HuggingFace checkpoints.
 - **Multi Platform** — CUDA, Metal, Vulkan, and CPU backends across [Linux, macOS, Windows, iOS, and Android](docs/install.md).
 - **Multi Node** — Shard transformer blocks across devices with [zero-config mDNS clustering](docs/clustering.md) or manual topology. Also runs entirely on a single machine.
-- **OpenAI-Compatible API** — REST API with streaming, plus a [built-in web UI and TUI chat client](docs/usage.md#web-ui).
+- **OpenAI- and Ollama-Compatible API** — REST API with streaming (`/v1/chat/completions` and ollama-style `/api/chat`, `/api/generate`, `/api/tags`), plus a [built-in web UI and TUI chat client](docs/usage.md#web-ui).
 - **Docker** — [Container builds](docs/docker.md) for Linux/NVIDIA with docker-compose cluster support.
 
 ## Quick Start
@@ -94,6 +94,14 @@ cake serve evilsocket/Qwen3-0.6B --cluster-key mysecret
 ```
 
 The master discovers workers via mDNS, assigns layers proportionally to each device's VRAM/compute, and pushes only the required weight shards. See the [clustering documentation](docs/clustering.md) for manual topology files and advanced configuration.
+
+#### Over Tailscale
+
+Cake's worker protocol is plain TCP, so clusters work across a [Tailscale](https://tailscale.com) tailnet. Pass `--tailscale` to the master to discover workers through the tailnet peer list (UDP broadcast doesn't cross a tailnet), or use a manual topology file with MagicDNS names — see [`topology-minis.yml`](topology-minis.yml) for a worked example running a cluster of 2014 Intel Mac Minis, and the [clustering docs](docs/clustering.md#clustering-over-tailscale) for details.
+
+```sh
+cake serve evilsocket/Qwen3-0.6B --cluster-key mysecret --tailscale
+```
 
 For the full usage guide and API reference, [check the project documentation](docs/index.md).
 
